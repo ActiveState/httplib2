@@ -62,6 +62,7 @@ except ImportError:
     except (ImportError, AttributeError):
         socks = None
 from httplib2 import auth
+from httplib2.decode import DecodeLimitError, DecodeRatioError, DeflateDecoder, GzipDecoder, LimitDecoder
 from httplib2.error import *
 
 # Build the appropriate socket wrapper for ssl
@@ -459,15 +460,21 @@ def _entry_disposition(response_headers, request_headers):
     return retval
 
 
-def _decompressContent(response, new_content):
+def _decompressContent(response, new_content, limit_kwargs=None):
+    """Decompress a gzip or deflate body within LimitDecoder's size and ratio limits.
+
+    A body that inflates past the limits raises DecodeLimitError or
+    DecodeRatioError instead of exhausting memory (CVE-2026-59939).
+    """
     content = new_content
+    encoding = response.get("content-encoding", None)
     try:
-        encoding = response.get("content-encoding", None)
         if encoding in ["gzip", "deflate"]:
             if encoding == "gzip":
-                content = gzip.GzipFile(fileobj=StringIO.StringIO(new_content)).read()
-            if encoding == "deflate":
-                content = zlib.decompress(content, -zlib.MAX_WBITS)
+                decoder = GzipDecoder()
+            else:
+                decoder = DeflateDecoder()
+            content = LimitDecoder(decoder, **(limit_kwargs or {})).consume_bytes(new_content, 0)
             response["content-length"] = str(len(content))
             # Record the historical presence of the encoding in a way the won't interfere.
             response["-content-encoding"] = response["content-encoding"]
@@ -475,7 +482,7 @@ def _decompressContent(response, new_content):
     except (IOError, zlib.error):
         content = ""
         raise FailedToDecompressContent(
-            _("Content purported to be compressed with %s but failed to decompress.") % response.get("content-encoding"),
+            _("Content purported to be compressed with %s but failed to decompress.") % encoding,
             response,
             content,
         )
@@ -1400,6 +1407,10 @@ class Http(object):
         ca_certs=None,
         disable_ssl_certificate_validation=False,
         ssl_version=None,
+        decode_limit_hard=None,
+        decode_limit_safe=None,
+        decode_limit_ratio=None,
+        decode_limit_chunk=None,
     ):
         """If 'cache' is a string then it is used as a directory name for
         a disk cache. Otherwise it must be an object that supports the
@@ -1472,6 +1483,18 @@ class Http(object):
 
         # Keep Authorization: headers on a redirect.
         self.forward_authorization_headers = False
+
+        # Limits for decompressing response bodies (CVE-2026-59939), in order:
+        # the Http() argument, then the environment variable
+        # httplib2_decode_limit_{hard,safe,ratio,chunk} (or upper case), then
+        # the LimitDecoder default.
+        limit_kwargs = dict(
+            hard_limit=try_value_or_env(int, decode_limit_hard, "httplib2_decode_limit_hard"),
+            safe_limit=try_value_or_env(int, decode_limit_safe, "httplib2_decode_limit_safe"),
+            ratio=try_value_or_env(float, decode_limit_ratio, "httplib2_decode_limit_ratio"),
+            chunk_size=try_value_or_env(int, decode_limit_chunk, "httplib2_decode_limit_chunk"),
+        )
+        self.limit_kwargs = dict((k, v) for k, v in limit_kwargs.items() if v is not None)
 
     def close(self):
         """Close persistent connections, clear sensitive data.
@@ -1596,7 +1619,7 @@ class Http(object):
                     content = response.read()
                 response = Response(response)
                 if method != "HEAD":
-                    content = _decompressContent(response, content)
+                    content = _decompressContent(response, content, self.limit_kwargs)
             break
         return (response, content)
 
@@ -1987,3 +2010,16 @@ class Response(dict):
             return self
         else:
             raise AttributeError(name)
+
+
+def try_value_or_env(to, value, env_key, default=None):
+    candidates = (value, os.environ.get(env_key), os.environ.get(env_key.upper()))
+    # same as `to(x1) or to(x2) or to(x3)` except accepting falsey values like 0
+    for x in candidates:
+        if x is None:
+            continue
+        try:
+            return to(x)
+        except ValueError:
+            pass
+    return default
