@@ -804,3 +804,12 @@ def rebuild_uri(old, scheme=_missing, netloc=_missing, host=_missing, port=_miss
         path = u.path
     new = (scheme, netloc, path) + u[3:]
     return urllib.parse.urlunsplit(new)
+
+
+def zlib_compress(bs):
+    return zlib.compress(bs)
+
+
+def randbytes(n):
+    # random.randbytes is Python 3.9+
+    return bytes(bytearray(random.getrandbits(8) for _ in range(n)))

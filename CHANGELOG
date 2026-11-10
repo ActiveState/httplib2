@@ -1,3 +1,13 @@
+0.20.4.post1
+
+  ActiveState security release for the Python 2.7 line.
+
+  CVE-2026-59939 (GHSA-j5g9-f88f-gfj3): decompression of gzip and deflate
+  response bodies is limited by output size and amplification ratio
+  (DecodeLimitError, DecodeRatioError). Limits are set with Http(decode_limit_*)
+  or the httplib2_decode_limit_* environment variables.
+  Backported from httplib2 0.32.0 (87581ad6), which requires Python 3.8.
+
 0.20.4
 
   proxy: support proxy urls with ipv6 address
