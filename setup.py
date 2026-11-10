@@ -4,7 +4,7 @@ import setuptools.command.test
 import sys
 
 pkgdir = {"": "python%s" % sys.version_info[0]}
-VERSION = "0.22.0"
+VERSION = "0.22.0.post1"
 
 
 # `python setup.py test` uses existing Python environment, no virtualenv, no pip.
